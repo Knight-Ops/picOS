@@ -20,7 +20,7 @@ pub struct Task {
 }
 
 impl<'a> Task {
-    pub fn new<T>(name: String, function_pointer: fn(Box<T>) -> !, args: T) -> Self
+    pub fn new<T>(name: &str, function_pointer: fn(Box<T>) -> !, args: T) -> Self
     where
         T: TaskArgument + 'static,
     {
@@ -34,7 +34,7 @@ impl<'a> Task {
         stack[TASK_STACK_SIZE - 8] = (&*boxed_args as *const T).addr() as u32;
 
         Self {
-            name,
+            name: name.into(),
             stack_pointer,
             args: boxed_args,
             stack: stack,

@@ -6,8 +6,8 @@ use quote::{ToTokens, TokenStreamExt};
 use syn::punctuated::Punctuated;
 use syn::token::{Brace, Colon, Comma, For, Impl, Struct};
 use syn::{
-    self, BareFnArg, Field, FieldsNamed, FnArg, Ident, ItemFn, ItemImpl, ItemStruct,
-    ParenthesizedGenericArguments, PathSegment, Type,
+    self, BareFnArg, ExprMethodCall, Field, FieldValue, FieldsNamed, FnArg, Ident, ItemFn,
+    ItemImpl, ItemStruct, ParenthesizedGenericArguments, PathSegment, Type,
 };
 
 use proc_macro2::{Punct, Spacing, Span, TokenStream, TokenTree};
@@ -88,6 +88,83 @@ pub fn task(_: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_
 
     // Put our created structure into a token stream so we can emit it
     matching_struct.to_tokens(&mut output);
+
+    // Clone the input function signature, since we need all the arguments anyways
+    let mut new_fn_sig = input_function.sig.clone();
+    new_fn_sig.constness = Some(syn::token::Const::default());
+    new_fn_sig.ident = Ident::new("new", Span::call_site());
+    new_fn_sig.output = syn::ReturnType::Type(
+        syn::token::RArrow::default(),
+        Box::new(syn::Type::Verbatim(TokenStream::from_str("Self").unwrap())),
+    );
+
+    // We need to retrieve the function args which are the same as the structure field names, we can use this shortcut to build
+    // a function that doesn't need to know the names of the structure fields for the add_task macro
+    let new_fn_args: Punctuated<FieldValue, Comma> = input_function
+        .sig
+        .inputs
+        .clone()
+        .into_iter()
+        .map(|x| match x {
+            FnArg::Typed(arg) => {
+                let identifier = match *arg.pat {
+                    syn::Pat::Ident(id) => id.ident,
+                    _ => panic!("Found non-ident token in function inputs"),
+                };
+                FieldValue {
+                    attrs: input_function.attrs.clone(),
+                    member: syn::Member::Named(identifier),
+                    colon_token: None,
+                    // This is basically garbage since we are using shortcut definitions of the structure
+                    expr: syn::Expr::Verbatim(TokenStream::from_str("").unwrap()),
+                }
+            }
+            _ => panic!("Function should not take self for a task"),
+        })
+        .collect();
+
+    // Build our new Impl for each created structure
+    let new_impl = ItemImpl {
+        attrs: input_function.attrs.clone(),
+        defaultness: None,
+        unsafety: None,
+        impl_token: Impl::default(),
+        generics: input_function.sig.generics.clone(),
+        trait_: None,
+        self_ty: Box::new(syn::Type::Path(syn::TypePath {
+            qself: None,
+            path: syn::Path::from(PathSegment {
+                ident: matching_struct.ident.clone(),
+                arguments: syn::PathArguments::None,
+            }),
+        })),
+        brace_token: Brace::default(),
+        items: vec![syn::ImplItem::Method(syn::ImplItemMethod {
+            attrs: input_function.attrs.clone(),
+            vis: syn::Visibility::Public(syn::VisPublic {
+                pub_token: syn::token::Pub::default(),
+            }),
+            defaultness: None,
+            sig: new_fn_sig,
+            block: syn::Block {
+                brace_token: syn::token::Brace::default(),
+                stmts: vec![syn::Stmt::Expr(syn::Expr::Struct(syn::ExprStruct {
+                    attrs: input_function.attrs.clone(),
+                    path: syn::Path::from(syn::PathSegment {
+                        ident: Ident::new("Self", Span::call_site()),
+                        arguments: syn::PathArguments::None,
+                    }),
+                    brace_token: syn::token::Brace::default(),
+                    fields: new_fn_args,
+                    dot2_token: None,
+                    rest: None,
+                }))],
+            },
+        })],
+    };
+
+    // Put our impl block in our token stream
+    new_impl.to_tokens(&mut output);
 
     // Build our empty Impl of TaskArgument for each created structure
     let task_arg_impl = ItemImpl {
@@ -213,7 +290,7 @@ pub fn task(_: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_
 
     modified_function.to_tokens(&mut output);
 
-    eprintln!("{}", output.to_string());
+    // eprintln!("{}", output.to_string());
 
     output.into()
 }
@@ -231,16 +308,110 @@ pub fn add_task(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     input_iter.next().unwrap();
     // Get the task name literal
     let task_name = syn::Lit::Str(syn::LitStr::new(
-        &input_iter.next().unwrap().to_string(),
+        &input_iter.next().unwrap().to_string().trim_matches('"'),
         Span::call_site(),
     ));
     input_iter.next().unwrap();
 
-    let rest: proc_macro::TokenStream = input_iter.collect();
+    // Parse the function to get the function name
+    let func: syn::ExprCall = syn::parse(input_iter.collect()).unwrap();
+    let argument_structure = match *func.clone().func {
+        syn::Expr::Path(path) => {
+            format!("_{}Arguments", path.path.segments.last().unwrap().ident)
+        }
+        _ => panic!("Parsing the function argument structure failed while expanding add_task"),
+    };
+    let argument_path = match *func.clone().func {
+        syn::Expr::Path(path) => path,
+        _ => panic!("Parsing the function argument structure failed while expanding add_task"),
+    };
 
-    let func: syn::ExprCall = syn::parse(rest).unwrap();
+    // Start building the argument structure::new such as _IdleArguments::new
+    let mut segments = Punctuated::new();
+    segments.push(syn::PathSegment {
+        ident: Ident::new(&argument_structure, Span::call_site()),
+        arguments: syn::PathArguments::None,
+    });
+    segments.push(syn::PathSegment {
+        ident: Ident::new("new", Span::call_site()),
+        arguments: syn::PathArguments::None,
+    });
 
-    eprintln!("{:?}", func);
+    let mut task_new_args: Punctuated<syn::Expr, Comma> = Punctuated::new();
+    // Push the task name
+    task_new_args.push(syn::Expr::Lit(syn::ExprLit {
+        attrs: vec![],
+        lit: task_name,
+    }));
+    // Push the function pointer
+    task_new_args.push(syn::Expr::Path(syn::ExprPath {
+        attrs: vec![],
+        qself: None,
+        path: argument_path.path,
+    }));
+    // Push the new function call for the arguments
+    task_new_args.push(syn::Expr::Call(syn::ExprCall {
+        attrs: vec![],
+        func: Box::new(syn::Expr::Path(syn::ExprPath {
+            attrs: vec![],
+            qself: None,
+            path: syn::Path {
+                leading_colon: None,
+                segments,
+            },
+        })),
+        paren_token: syn::token::Paren::default(),
+        args: func.args,
+    }));
+
+    // Start building the Task::new segment
+    let mut task_segments = Punctuated::new();
+    task_segments.push(syn::PathSegment {
+        ident: Ident::new("Task", Span::call_site()),
+        arguments: syn::PathArguments::None,
+    });
+    task_segments.push(syn::PathSegment {
+        ident: Ident::new("new", Span::call_site()),
+        arguments: syn::PathArguments::None,
+    });
+
+    // Build the arguments to Task::new
+    let mut args: Punctuated<syn::Expr, Comma> = Punctuated::new();
+    args.push(syn::Expr::Call(syn::ExprCall {
+        attrs: vec![],
+        func: Box::new(syn::Expr::Path(syn::ExprPath {
+            attrs: vec![],
+            qself: None,
+            path: syn::Path {
+                leading_colon: None,
+                segments: task_segments,
+            },
+        })),
+        paren_token: syn::token::Paren::default(),
+        args: task_new_args,
+    }));
+
+    // This is the single method call we actually need to emit in the form rougly of scheduler.add_task(Task::new(TASK_NAME, TASK_FUCTION_PTR, TASK_ARG_STRUCT))
+    let method_call = ExprMethodCall {
+        attrs: vec![],
+        receiver: Box::new(syn::Expr::Path(syn::ExprPath {
+            attrs: vec![],
+            qself: None,
+            path: syn::Path::from(syn::PathSegment {
+                ident: scheduler_ident,
+                arguments: syn::PathArguments::None,
+            }),
+        })),
+        dot_token: syn::token::Dot::default(),
+        method: Ident::new("add_task", Span::call_site()),
+        turbofish: None,
+        paren_token: syn::token::Paren::default(),
+        args,
+    };
+
+    method_call.to_tokens(&mut output);
+
+    eprintln!("{}", output.to_string());
 
     output.into()
 }

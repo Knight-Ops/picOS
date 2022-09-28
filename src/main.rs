@@ -133,16 +133,18 @@ fn main() -> ! {
     //     RunRotationArguments { timer: &timer },
     // ));
 
-    scheduler
-        .add_task(Task::new(
-            "Enable LED".into(),
-            enable_led,
-            _enable_ledArguments {
-                enable: true,
-                delay: 60_000_000,
-            },
-        ))
-        .unwrap();
+    // scheduler
+    //     .add_task(Task::new(
+    //         "Enable LED".into(),
+    //         enable_led,
+    //         _enable_ledArguments {
+    //             enable: true,
+    //             delay: 60_000_000,
+    //         },
+    //     ))
+    //     .unwrap();
+
+    add_task!(scheduler, "Enable LED", enable_led(true, 60_000_000)).unwrap();
 
     // scheduler
     //     .add_task(Task::new(
@@ -152,9 +154,11 @@ fn main() -> ! {
     //     ))
     //     .unwrap();
 
-    scheduler
-        .add_task(Task::new("Idle".into(), idle, _idleArguments {}))
-        .unwrap();
+    // scheduler
+    //     .add_task(Task::new("Idle".into(), idle, _idleArguments {}))
+    //     .unwrap();
+
+    add_task!(scheduler, "Idle", idle()).unwrap();
 
     scheduler.start(core.SYST).unwrap();
 
