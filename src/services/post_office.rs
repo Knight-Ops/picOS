@@ -74,7 +74,7 @@ impl PostOffice {
         }
     }
 
-    pub fn send(&self, msg: MailboxMsg) -> Result<(), PostOfficeError> {
+    pub fn send(&self, msg: MailboxMessage) -> Result<(), PostOfficeError> {
         if let Some(mailboxes) = self.mailboxes.get(&msg.to_task) {
             mailboxes.incoming.borrow_mut().push_front(msg);
 
@@ -84,9 +84,12 @@ impl PostOffice {
         }
     }
 
-    pub fn send_to_task_by_name(task_name: &str, data: Vec<u8>) -> Result<(), PostOfficeError> {
+    pub fn send_to_task_by_name(
+        task_name: &str,
+        data: MailboxMessageType,
+    ) -> Result<(), PostOfficeError> {
         if let Some(post_office) = POST_OFFICE.lock().borrow().as_ref() {
-            let msg = MailboxMsg {
+            let msg = MailboxMessage {
                 to_task: *post_office.name_to_idx.get(task_name).unwrap(),
                 from_task: 0,
                 data: data,
@@ -104,7 +107,7 @@ impl PostOffice {
         }
     }
 
-    pub fn recv(task_idx: usize) -> Result<Option<MailboxMsg>, PostOfficeError> {
+    pub fn recv(task_idx: usize) -> Result<Option<MailboxMessage>, PostOfficeError> {
         if let Some(post_office) = POST_OFFICE.lock().borrow().as_ref() {
             if let Some(mailboxes) = post_office.mailboxes.get(&task_idx) {
                 Ok(mailboxes.incoming.borrow_mut().pop_front())
@@ -116,7 +119,7 @@ impl PostOffice {
         }
     }
 
-    pub fn recv_by_name(task_name: String) -> Result<Option<MailboxMsg>, PostOfficeError> {
+    pub fn recv_by_name(task_name: String) -> Result<Option<MailboxMessage>, PostOfficeError> {
         if let Some(post_office) = POST_OFFICE.lock().borrow().as_ref() {
             if let Some(mailboxes) = post_office
                 .mailboxes
@@ -132,28 +135,27 @@ impl PostOffice {
     }
 }
 
-pub struct MailboxMsg {
+#[derive(Debug)]
+pub struct MailboxMessage {
     to_task: usize,
     from_task: usize,
-    data: Vec<u8>,
+    pub data: MailboxMessageType,
 }
 
-impl MailboxMsg {
-    pub fn get_data(&self) -> &[u8] {
-        &self.data
-    }
+#[derive(Debug)]
+pub enum MailboxMessageType {
+    Generic(Vec<u8>),
+    Uart(Vec<u8>),
 }
 
 pub struct Mailboxes {
-    incoming: RefCell<VecDeque<MailboxMsg>>,
-    // from_task: RefCell<VecDeque<MailboxMsg>>,
+    incoming: RefCell<VecDeque<MailboxMessage>>,
 }
 
 impl Mailboxes {
     fn new() -> Self {
         Self {
             incoming: RefCell::new(VecDeque::new()),
-            // from_task: RefCell::new(VecDeque::new()),
         }
     }
 }

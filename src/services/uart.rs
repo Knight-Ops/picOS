@@ -1,4 +1,4 @@
-use super::post_office::PostOffice;
+use super::post_office::{MailboxMessageType, PostOffice};
 use crate::bsp::hal::uart::{self, Enabled, UartPeripheral};
 use crate::pac::UART0;
 use crate::task;
@@ -89,9 +89,16 @@ pub fn uart(
     debug!("UART initialization complete!");
     loop {
         if let Ok(Some(msg)) = PostOffice::recv_by_name("UART".into()) {
-            let mut lock = UART.lock();
-            let writer = lock.get_mut().as_mut().unwrap();
-            writer.write_full_blocking(msg.get_data());
+            match msg.data {
+                MailboxMessageType::Uart(data) => {
+                    let mut lock = UART.lock();
+                    let writer = lock.get_mut().as_mut().unwrap();
+                    writer.write_full_blocking(&data);
+                }
+                _ => {
+                    debug!("Unexpected message type in UART Mailbox");
+                }
+            }
         }
     }
 }
